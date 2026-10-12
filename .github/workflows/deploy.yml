@@ -20,9 +20,18 @@ env:
 
 jobs:
   build:
+    # Skip until the repo is configured (docs/setup.md).
+    if: vars.SOLUTION_NAME != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+
+      - name: Check the solution has been exported
+        run: |
+          if [ ! -d "solutions/$SOLUTION_NAME" ]; then
+            echo "::error::solutions/$SOLUTION_NAME not found. Run 'Export from Dev' first."
+            exit 1
+          fi
 
       - name: Install Power Platform tools
         uses: microsoft/powerplatform-actions/actions-install@v1.9.2
