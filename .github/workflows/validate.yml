@@ -1,0 +1,41 @@
+# On every pull request that touches the solution: prove it packs, and run Solution Checker.
+name: Validate
+
+on:
+  pull_request:
+    paths: [solutions/**, deployment-settings/**]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SOLUTION_NAME: ${{ vars.SOLUTION_NAME }}
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Power Platform tools
+        uses: microsoft/powerplatform-actions/actions-install@v1.9.2
+
+      - name: Pack managed solution
+        uses: microsoft/powerplatform-actions/pack-solution@v1.9.2
+        with:
+          solution-folder: solutions/${{ env.SOLUTION_NAME }}
+          solution-file: out/${{ env.SOLUTION_NAME }}_managed.zip
+          solution-type: Managed
+          process-canvas-apps: true
+
+      # Solution Checker: static analysis for performance, reliability and upgrade issues.
+      - name: Run Solution Checker
+        uses: microsoft/powerplatform-actions/check-solution@v1.9.2
+        with:
+          environment-url: ${{ vars.DEV_ENVIRONMENT_URL }}
+          app-id: ${{ secrets.PP_APP_ID }}
+          client-secret: ${{ secrets.PP_CLIENT_SECRET }}
+          tenant-id: ${{ secrets.PP_TENANT_ID }}
+          path: out/${{ env.SOLUTION_NAME }}_managed.zip
+          checker-logs-artifact-name: solution-checker-results

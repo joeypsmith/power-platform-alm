@@ -1,0 +1,90 @@
+# Export the solution from Dev, unpack it into source files, and open a pull request.
+# Run it by hand (Actions → Export from Dev → Run workflow) after making changes in Dev.
+name: Export from Dev
+
+on:
+  workflow_dispatch:
+    inputs:
+      message:
+        description: What changed? (used for the commit and PR title)
+        required: true
+        default: Update solution from Dev
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write # to start the Validate workflow on the new branch
+
+concurrency:
+  group: export
+  cancel-in-progress: false
+
+env:
+  SOLUTION_NAME: ${{ vars.SOLUTION_NAME }}
+  # Version is stamped onto the solution in Dev before export: 1.0.<run number>.0
+  SOLUTION_VERSION: 1.0.${{ github.run_number }}.0
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Power Platform tools
+        uses: microsoft/powerplatform-actions/actions-install@v1.9.2
+
+      - name: Export unmanaged solution
+        uses: microsoft/powerplatform-actions/export-solution@v1.9.2
+        with:
+          environment-url: ${{ vars.DEV_ENVIRONMENT_URL }}
+          app-id: ${{ secrets.PP_APP_ID }}
+          client-secret: ${{ secrets.PP_CLIENT_SECRET }}
+          tenant-id: ${{ secrets.PP_TENANT_ID }}
+          solution-name: ${{ env.SOLUTION_NAME }}
+          solution-version: ${{ env.SOLUTION_VERSION }}
+          solution-output-file: out/${{ env.SOLUTION_NAME }}.zip
+          run-asynchronously: true
+
+      - name: Export managed solution
+        uses: microsoft/powerplatform-actions/export-solution@v1.9.2
+        with:
+          environment-url: ${{ vars.DEV_ENVIRONMENT_URL }}
+          app-id: ${{ secrets.PP_APP_ID }}
+          client-secret: ${{ secrets.PP_CLIENT_SECRET }}
+          tenant-id: ${{ secrets.PP_TENANT_ID }}
+          solution-name: ${{ env.SOLUTION_NAME }}
+          solution-output-file: out/${{ env.SOLUTION_NAME }}_managed.zip
+          managed: true
+          run-asynchronously: true
+
+      # "Both" keeps managed and unmanaged differences in source, so CI can pack either one.
+      - name: Unpack into source control
+        uses: microsoft/powerplatform-actions/unpack-solution@v1.9.2
+        with:
+          solution-file: out/${{ env.SOLUTION_NAME }}.zip
+          solution-folder: solutions/${{ env.SOLUTION_NAME }}
+          solution-type: Both
+          overwrite-files: true
+          process-canvas-apps: true
+
+      - name: Open pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MESSAGE: ${{ inputs.message }}
+        run: |
+          if [ -z "$(git status --porcelain solutions)" ]; then
+            echo "No changes in Dev since the last export."
+            exit 0
+          fi
+          branch="export/${SOLUTION_VERSION}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add solutions
+          git commit -m "$MESSAGE (v${SOLUTION_VERSION})"
+          git push -u origin "$branch"
+          gh pr create --base main --head "$branch" \
+            --title "$MESSAGE (v${SOLUTION_VERSION})" \
+            --body "Exported **${SOLUTION_NAME}** v${SOLUTION_VERSION} from Dev by @${GITHUB_ACTOR}. Review the diff, let the validation checks finish, then merge to deploy to Test."
+          # PRs opened with the Actions token don't trigger pull_request workflows, so start validation directly.
+          gh workflow run validate.yml --ref "$branch"

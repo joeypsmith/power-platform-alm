@@ -1,0 +1,96 @@
+# Build one managed package from source, deploy it to Test, then to Prod-Sim after approval.
+# The "production" GitHub environment has a required reviewer, which is the approval gate.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+    paths: [solutions/**, deployment-settings/**]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  SOLUTION_NAME: ${{ vars.SOLUTION_NAME }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Power Platform tools
+        uses: microsoft/powerplatform-actions/actions-install@v1.9.2
+
+      - name: Pack managed solution
+        uses: microsoft/powerplatform-actions/pack-solution@v1.9.2
+        with:
+          solution-folder: solutions/${{ env.SOLUTION_NAME }}
+          solution-file: out/${{ env.SOLUTION_NAME }}_managed.zip
+          solution-type: Managed
+          process-canvas-apps: true
+
+      # The exact same file goes to every environment, so Prod-Sim gets what Test approved.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: managed-solution
+          path: out/${{ env.SOLUTION_NAME }}_managed.zip
+          if-no-files-found: error
+
+  deploy-test:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: test
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: managed-solution
+          path: out
+      - name: Install Power Platform tools
+        uses: microsoft/powerplatform-actions/actions-install@v1.9.2
+      - name: Import into Test
+        uses: microsoft/powerplatform-actions/import-solution@v1.9.2
+        with:
+          environment-url: ${{ vars.ENVIRONMENT_URL }}
+          app-id: ${{ secrets.PP_APP_ID }}
+          client-secret: ${{ secrets.PP_CLIENT_SECRET }}
+          tenant-id: ${{ secrets.PP_TENANT_ID }}
+          solution-file: out/${{ env.SOLUTION_NAME }}_managed.zip
+          # Connection references and environment variable values for this environment, if present.
+          use-deployment-settings-file: ${{ hashFiles('deployment-settings/test.json') != '' }}
+          deployment-settings-file: deployment-settings/test.json
+          publish-changes: true
+          run-asynchronously: true
+          max-async-wait-time: 30
+
+  deploy-prod:
+    needs: deploy-test
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: managed-solution
+          path: out
+      - name: Install Power Platform tools
+        uses: microsoft/powerplatform-actions/actions-install@v1.9.2
+      - name: Import into Prod-Sim
+        uses: microsoft/powerplatform-actions/import-solution@v1.9.2
+        with:
+          environment-url: ${{ vars.ENVIRONMENT_URL }}
+          app-id: ${{ secrets.PP_APP_ID }}
+          client-secret: ${{ secrets.PP_CLIENT_SECRET }}
+          tenant-id: ${{ secrets.PP_TENANT_ID }}
+          solution-file: out/${{ env.SOLUTION_NAME }}_managed.zip
+          use-deployment-settings-file: ${{ hashFiles('deployment-settings/prod.json') != '' }}
+          deployment-settings-file: deployment-settings/prod.json
+          publish-changes: true
+          run-asynchronously: true
+          max-async-wait-time: 30

@@ -1,0 +1,4 @@
+# Build output (solution zips are rebuilt from source; never commit them)
+out/
+*.zip
+.env
